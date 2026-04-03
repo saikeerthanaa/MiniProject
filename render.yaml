@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: trade-journal
+    runtime: java
+    buildCommand: mvn clean package -q
+    startCommand: java -jar target/trade-journal-1.0.0.jar
+    envVars:
+      - key: JAVA_VERSION
+        value: "21"
+    healthCheckPath: /api/health
+    maxInstances: 1
