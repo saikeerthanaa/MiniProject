@@ -1,5 +1,5 @@
 # Multi-stage build for Spring Boot application
-FROM maven:3.9.2-eclipse-temurin-21 AS builder
+FROM maven:3.9-eclipse-temurin-21-jammy AS builder
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
