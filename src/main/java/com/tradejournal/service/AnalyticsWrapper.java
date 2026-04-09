@@ -101,13 +101,3 @@ public class AnalyticsWrapper {
         return stats;
     }
 }
-        // For now, return a placeholder
-        return switch (strategyId) {
-            case 1 -> "Trend Following";
-            case 2 -> "Mean Reversion";
-            case 3 -> "Momentum";
-            case 4 -> "Value";
-            default -> "Strategy " + strategyId;
-        };
-    }
-}
