@@ -1,153 +1,106 @@
 package com.tradejournal.service;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import com.trade.service.PortfolioAnalyticsService;
 import com.tradejournal.dto.AnalyticsResponse;
 import com.tradejournal.dto.StrategyStatsDto;
 
 /**
- * AnalyticsWrapper — Adapts the existing PortfolioAnalyticsService
- * to provide Spring-friendly methods that the TradeController expects.
- *
- * This service bridges the gap between:
- * - Existing backend: PortfolioAnalyticsService (calculates metrics)
- * - Spring Controller: Needs specific getter methods
- * - Frontend: Expects specific JSON structure
+ * AnalyticsWrapper — Simple analytics service that queries the database directly
+ * for actual portfolio performance metrics.
  */
 @Service
 public class AnalyticsWrapper {
 
     @Autowired(required = false)
-    private PortfolioAnalyticsService analyticsService;
+    private JdbcTemplate jdbcTemplate;
 
-    private final int PORTFOLIO_ID = 1;  // Default portfolio (can be made configurable)
-
-    /**
-     * Get total P&L for the portfolio
-     * @return Total PnL as double (negative = loss, positive = gain)
-     */
-    public Double getTotalPnl() {
-        if (analyticsService == null) return 0.0;
-        try {
-            BigDecimal pnl = analyticsService.calculatePnL(PORTFOLIO_ID);
-            return pnl != null ? pnl.doubleValue() : 0.0;
-        } catch (Exception e) {
-            System.err.println("Error calculating PnL: " + e.getMessage());
-            return 0.0;
-        }
-    }
+    private final int PORTFOLIO_ID = 1;  // Default portfolio
 
     /**
-     * Get win rate as a percentage (0-100)
-     * @return Win rate percentage (e.g., 66.67 for 66.67%)
-     */
-    public Double getWinRate() {
-        if (analyticsService == null) return 0.0;
-        try {
-            // Calculate win rate for default strategy (ID = 1)
-            BigDecimal winRate = analyticsService.calculateWinRate(1, PORTFOLIO_ID);
-            return winRate != null ? winRate.doubleValue() : 0.0;
-        } catch (Exception e) {
-            System.err.println("Error calculating win rate: " + e.getMessage());
-            return 0.0;
-        }
-    }
-
-    /**
-     * Get total number of trades
-     * @return Count of all trades
-     */
-    public Integer getTotalTradeCount() {
-        if (analyticsService == null) return 0;
-        // For now, return a placeholder - integrate with your Trade repository
-        // to get actual count from database
-        return 0;  // TODO: Inject TradeRepository and call getAllTrades().size()
-    }
-
-    /**
-     * Get number of winning trades
-     * @return Count of profitable trades
-     */
-    public Integer getWinningTradeCount() {
-        if (analyticsService == null) return 0;
-        try {
-            Double winRate = getWinRate();
-            Integer totalTrades = getTotalTradeCount();
-            if (totalTrades == null || totalTrades == 0) return 0;
-            return (int) (totalTrades * winRate / 100.0);
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    /**
-     * Get strategy-wise performance statistics
-     * @return List of StrategyStatsDto with metrics per strategy
-     */
-    public List<StrategyStatsDto> getStrategyStats() {
-        List<StrategyStatsDto> stats = new ArrayList<>();
-
-        if (analyticsService == null) return stats;
-
-        try {
-            Map<Integer, BigDecimal> strategyPnL = analyticsService.getStrategyStatistics(PORTFOLIO_ID);
-
-            if (strategyPnL == null || strategyPnL.isEmpty()) {
-                return stats;
-            }
-
-            for (Map.Entry<Integer, BigDecimal> entry : strategyPnL.entrySet()) {
-                Integer strategyId = entry.getKey();
-                BigDecimal pnl = entry.getValue();
-
-                StrategyStatsDto dto = new StrategyStatsDto();
-                dto.strategyId = strategyId;
-                dto.strategyName = getStrategyName(strategyId);  // Map ID to name
-                dto.totalPnl = pnl.doubleValue();
-                dto.totalTrades = 0;  // TODO: Calculate from database
-                dto.winningTrades = 0;
-                dto.winRate = 0.0;
-                dto.avgReturn = dto.totalTrades > 0 ? dto.totalPnl / dto.totalTrades : 0.0;
-
-                stats.add(dto);
-            }
-        } catch (Exception e) {
-            System.err.println("Error retrieving strategy stats: " + e.getMessage());
-        }
-
-        return stats;
-    }
-
-    /**
-     * Build complete analytics response for frontend
-     * @return AnalyticsResponse with all metrics
+     * Build complete analytics response for frontend by querying database
      */
     public AnalyticsResponse buildAnalyticsResponse() {
         AnalyticsResponse resp = new AnalyticsResponse();
-        resp.totalPnl = getTotalPnl();
-        resp.winRate = getWinRate();
-        resp.totalTrades = getTotalTradeCount();
-        resp.winningTrades = getWinningTradeCount();
-        resp.losingTrades = Math.max(0, resp.totalTrades - resp.winningTrades);
-        resp.strategyStats = getStrategyStats();
+
+        if (jdbcTemplate == null) {
+            return resp;
+        }
+
+        try {
+            // Query PerformanceSummary table for aggregated metrics
+            String perfQuery = "SELECT SUM(total_pnl) as total_pnl, AVG(win_rate) as avg_win_rate, "
+                             + "SUM(total_trades) as total_trades, SUM(winning_trades) as winning_trades "
+                             + "FROM \"PerformanceSummary\"";
+            
+            jdbcTemplate.queryForMap(perfQuery).forEach((key, value) -> {
+                if ("total_pnl".equals(key)) {
+                    resp.totalPnl = value != null ? ((Number) value).doubleValue() : 0.0;
+                } else if ("avg_win_rate".equals(key)) {
+                    resp.winRate = value != null ? ((Number) value).doubleValue() : 0.0;
+                } else if ("total_trades".equals(key)) {
+                    resp.totalTrades = value != null ? ((Number) value).intValue() : 0;
+                } else if ("winning_trades".equals(key)) {
+                    resp.winningTrades = value != null ? ((Number) value).intValue() : 0;
+                }
+            });
+
+            resp.losingTrades = Math.max(0, resp.totalTrades - resp.winningTrades);
+
+            // Get strategy-wise stats
+            resp.strategyStats = getStrategyStats();
+
+        } catch (Exception e) {
+            System.err.println("[AnalyticsWrapper] Error building analytics: " + e.getMessage());
+        }
+
         return resp;
     }
 
     /**
-     * Helper: Map strategy ID to strategy name
-     * This should query the Strategy table or use a cache
+     * Get strategy-wise performance statistics
      */
-    private String getStrategyName(Integer strategyId) {
-        if (strategyId == null) return "Unknown";
-        
-        // TODO: Query Strategy table for name
+    private List<StrategyStatsDto> getStrategyStats() {
+        List<StrategyStatsDto> stats = new ArrayList<>();
+
+        if (jdbcTemplate == null) return stats;
+
+        try {
+            // Query trades grouped by strategy
+            String query = "SELECT s.id, s.name, "
+                         + "COUNT(CASE WHEN t.trade_type = 'SELL' THEN 1 END) as total_trades, "
+                         + "COUNT(CASE WHEN t.price > (SELECT AVG(price) FROM \"Trade\" t2 WHERE t2.strategy_id = s.id AND t2.trade_type = 'BUY') THEN 1 END) as winning_trades "
+                         + "FROM \"Strategy\" s "
+                         + "LEFT JOIN \"Trade\" t ON s.id = t.strategy_id "
+                         + "GROUP BY s.id, s.name "
+                         + "HAVING COUNT(t.id) > 0";
+
+            jdbcTemplate.queryForList(query).forEach(row -> {
+                StrategyStatsDto dto = new StrategyStatsDto();
+                dto.strategyId = (Integer) row.get("id");
+                dto.strategyName = (String) row.get("name");
+                dto.totalTrades = (Integer) row.get("total_trades");
+                dto.winningTrades = (Integer) row.get("winning_trades");
+                dto.winRate = dto.totalTrades > 0 ? (dto.winningTrades * 100.0 / dto.totalTrades) : 0.0;
+                dto.totalPnl = 0.0;  // Would need to calculate from individual trades
+                dto.avgReturn = 0.0;
+                
+                stats.add(dto);
+            });
+
+        } catch (Exception e) {
+            System.err.println("[AnalyticsWrapper] Error getting strategy stats: " + e.getMessage());
+        }
+
+        // If no strategies found from trades, return empty list
+        return stats;
+    }
+}
         // For now, return a placeholder
         return switch (strategyId) {
             case 1 -> "Trend Following";
